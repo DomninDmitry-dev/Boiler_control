@@ -30,7 +30,7 @@
 #include <ssid_config.h>
 #include "espressif/user_interface.h"
 
-#include <TI_aes.h>
+//#include <TI_aes.h>
 
 #include "ds18b20/ds18b20.h"
 
@@ -49,17 +49,39 @@
 #define ECHO_PORT_2 100
 #define EVENTS_QUEUE_SIZE 100
 
-#define MAX_SENSORS 8
+#define MAX_SENSORS 4
 #define RESCAN_INTERVAL 8
 #define LOOP_DELAY_MS 250
 #define SENSOR_GPIO 5
 
+#define rele_on gpio_write(4, 1)
+#define rele_off gpio_write(4, 0)
+
+typedef struct {
+	bool state;
+	float temp;
+} sensor_t;
+
 const int rele = 4;
+sensor_t temp_device = { false, 0 };
+sensor_t temp_out = { false, 0 };
+sensor_t temp_room = { false, 0 };
+sensor_t temp_water = { false, 0 };
+
+bool set_delta = false;
+float set_temp = 30.5, set_temp_delta = 2;
+bool mode = false; // false = auto, true = remote
+
+#define ADDR_DEVICE 0x300000027d06ba28
+//#define ADDR_OUTSIDE 0x23000000a6389928
+#define ADDR_OUTSIDE 0x86000000a642d928
+#define ADDR_ROOM 0x3700000263eb4828
+#define ADDR_WATER 0x0d000000a678df28
 
 QueueHandle_t xQueue_events;
 typedef struct {
-    struct netconn *nc ;
-    uint8_t type ;
+    struct netconn *nc;
+    uint8_t type;
 } netconn_events;
 
 static const char * const auth_modes [] = {
@@ -68,6 +90,12 @@ static const char * const auth_modes [] = {
     [AUTH_WPA_PSK]      = "WPA/PSK",
     [AUTH_WPA2_PSK]     = "WPA2/PSK",
     [AUTH_WPA_WPA2_PSK] = "WPA/WPA2/PSK"
+};
+
+const char str_help[] = {
+		"releon/releoff\n"
+		"modeauto/moderemote\n"
+		"status\n=>"
 };
 
 /*
@@ -246,7 +274,7 @@ static void socketsTask(void *pvParameters)
 			ip_addr_t client_addr; //Address port
 			uint16_t client_port; //Client port
 			netconn_peer(nc_in, &client_addr, &client_port);
-			snprintf(buf, sizeof(buf), "Your address is %d.%d.%d.%d:%u.\r\n",
+			snprintf(buf, sizeof(buf), "Your address is %d.%d.%d.%d:%u.\r\n=>",
 					ip4_addr1(&client_addr), ip4_addr2(&client_addr),
 					ip4_addr3(&client_addr), ip4_addr4(&client_addr),
 					client_port);
@@ -263,17 +291,50 @@ static void socketsTask(void *pvParameters)
 						//netconn_write(events.nc, buffer, strlen(buffer), NETCONN_COPY);
 						debug("Client %u send: %s\n",(uint32_t)events.nc, buffer);
 						if (strstr(buffer, "releon") != 0) {
-							gpio_write(rele, 1);
-							netconn_write(events.nc, "Rele on\n", strlen("Rele on\n"), NETCONN_COPY);
-							debug("Rele on");
+							if (mode) {
+								gpio_write(rele, 1);
+								netconn_write(events.nc, "Rele on\n=>", strlen("Rele on\n=>"), NETCONN_COPY);
+								debug("Rele on\n");
+							} else {
+								netconn_write(events.nc, "Rele don't on, because mode auto\n=>",
+										strlen("Rele don't on, because mode auto\n=>"), NETCONN_COPY);
+								debug("Rele don't on, because mode auto\n");
+							}
 						} else if (strstr(buffer, "releoff") != 0) {
-							gpio_write(rele, 0);
-							netconn_write(events.nc, "Rele off\n", strlen("Rele off\n"), NETCONN_COPY);
-							debug("Rele off");
+							if (mode) {
+								gpio_write(rele, 0);
+								netconn_write(events.nc, "Rele off\n=>", strlen("Rele off\n=>"), NETCONN_COPY);
+								debug("Rele off");
+							} else {
+								netconn_write(events.nc, "Rele don't off, because mode auto\n=>",
+										strlen("Rele don't off, because mode auto\n=>"), NETCONN_COPY);
+								debug("Rele don't off, because mode auto\n");
+							}
+						} else if (strstr(buffer, "modeauto") != 0) {
+							mode = false;
+							netconn_write(events.nc, "Mode auto\n=>", strlen("Mode auto\n=>"), NETCONN_COPY);
+							debug("Mode auto\n");
+						} else if (strstr(buffer, "moderemote") != 0) {
+							mode = true;
+							netconn_write(events.nc, "Mode remote\n=>", strlen("Mode remote\n=>"), NETCONN_COPY);
+							debug("Mode remote\n");
+						} else if (strstr(buffer, "help") != 0) {
+							netconn_write(events.nc, str_help, strlen(str_help), NETCONN_COPY);
+							debug("Help");
 						} else if (strstr(buffer, "status") != 0) {
-							char str[50];
-							sprintf(str, "Rele=%d\n",
-									gpio_read(rele));
+							char str[500];
+							sprintf(str, "Mode: %s\nRele: %s\n"
+										"Temp out: %.01f (%s)\n"
+										"Temp room: %.01f (%s)\n"
+										"Temp device: %.01f (%s)\n"
+										"Temp water: %.01f (%s)\n=>",
+										mode ? "Remote" : "Auto",
+										gpio_read(rele) ? "on" : "off",
+										temp_out.temp, temp_out.state ? "work" : "error",
+										temp_room.temp, temp_room.state ? "work" : "error",
+										temp_device.temp, temp_device.state ? "work" : "error",
+										temp_water.temp, temp_water.state ? "work" : "error"
+										);
 							netconn_write(events.nc, str, strlen(str), NETCONN_COPY);
 							debug("%s", str);
 						}
@@ -295,7 +356,7 @@ static void socketsTask(void *pvParameters)
 	}
 }
 
-void temp(void *pvParameters)
+void sensor(void *pvParameters)
 {
     ds18b20_addr_t addrs[MAX_SENSORS];
     float temps[MAX_SENSORS];
@@ -320,6 +381,8 @@ void temp(void *pvParameters)
 
         if (sensor_count < 1) {
         	printf("\nNo sensors detected!\n");
+          vTaskDelay(LOOP_DELAY_MS * 10 / portTICK_PERIOD_MS);
+          mode = true;
         } else {
         	printf("\n%d sensors detected:\n", sensor_count);
             // If there were more sensors found than we have space to handle,
@@ -327,20 +390,67 @@ void temp(void *pvParameters)
             if (sensor_count > MAX_SENSORS) sensor_count = MAX_SENSORS;
 
             // Do a number of temperature samples, and print the results.
-            for (int i = 0; i < RESCAN_INTERVAL; i++) {
-                ds18b20_measure_and_read_multi(SENSOR_GPIO, addrs, sensor_count, temps);
-                for (int j = 0; j < sensor_count; j++) {
+            for (int8_t i = 0; i < RESCAN_INTERVAL; i++) {
+                if (ds18b20_measure_and_read_multi(SENSOR_GPIO, addrs, sensor_count, temps) == false) {
+                	printf("Temp error, sensor: %d\n", sensor_count);
+                }
+                for (int8_t j = 0; j < sensor_count; j++) {
                     // The DS18B20 address is a 64-bit integer, but newlib-nano
                     // printf does not support printing 64-bit values, so we
                     // split it up into two 32-bit integers and print them
                     // back-to-back to make it look like one big hex number.
-                    uint32_t addr0 = addrs[j] >> 32;
-                    uint32_t addr1 = addrs[j];
+                    //uint32_t addr0 = addrs[j] >> 32;
+                    //uint32_t addr1 = addrs[j];
+                    uint64_t addr = addrs[j];
                     float temp_c = temps[j];
-                    float temp_f = (temp_c * 1.8) + 32;
-                    printf("  Sensor %08x%08x reports %f deg C (%f deg F)\n", addr0, addr1, temp_c, temp_f);
-                    //if ((int)temp_c > 30) gpio_write(4, 1);
-                    //else gpio_write(4, 0);
+                    //float temp_f = (temp_c * 1.8) + 32;
+                    //printf("  Sensor %08x%08x reports %f deg C (%f deg F)\n", addr0, addr1, temp_c, temp_f);
+                    switch (addr) {
+						case ADDR_DEVICE: {
+							if ((uint32_t)temp_c == 0xffffffff) {
+								temp_device.state = false;
+							} else {
+								temp_device.state = true;
+								temp_device.temp = temp_c;
+							}
+							printf("Temp device, addr: %08x%08x, state: %d, temp: %.01f\n",
+									(uint32_t)(addr >> 32), (uint32_t)(addr), temp_device.state, temp_device.temp);
+							break;
+						}
+						case ADDR_OUTSIDE: {
+							if ((uint32_t)temp_c == 0xffffffff) {
+								temp_out.state = false;
+							} else {
+								temp_out.state = true;
+								temp_out.temp = temp_c;
+							}
+							printf("Temp out, addr: %08x%08x, state: %d, temp: %.01f\n",
+									(uint32_t)(addr >> 32), (uint32_t)(addr), temp_out.state, temp_out.temp);
+							break;
+						}
+						case ADDR_ROOM: {
+							if ((uint32_t)temp_c == 0xffffffff) {
+								temp_room.state = false;
+							} else {
+								temp_room.state = true;
+								temp_room.temp = temp_c;
+							}
+							printf("Temp room, addr: %08x%08x, state: %d, temp: %.01f\n",
+									(uint32_t)(addr >> 32), (uint32_t)(addr), temp_room.state, temp_room.temp);
+							break;
+						}
+						case ADDR_WATER: {
+							if ((uint32_t)temp_c == 0xffffffff) {
+								temp_water.state = false;
+							} else {
+								temp_water.state = true;
+								temp_water.temp = temp_c;
+							}
+							printf("Temp water, addr: %08x%08x, state: %d, temp: %.01f\n",
+									(uint32_t)(addr >> 32), (uint32_t)(addr), temp_water.state, temp_water.temp);
+							break;
+						}
+                    }
                 }
                 printf("\n");
 
@@ -349,6 +459,31 @@ void temp(void *pvParameters)
                 // least 750ms to run, so this is on top of that delay).
                 vTaskDelay(LOOP_DELAY_MS / portTICK_PERIOD_MS);
             }
+            if (mode == false) {
+				if (temp_out.state == false && temp_room.state == false) {
+					mode = true;
+					rele_on;
+				} else {
+					if (temp_out.temp < 10) {
+						if (set_delta) {
+							if (temp_room.temp < (set_temp - set_temp_delta)) {
+								set_delta = false;
+								rele_on;
+							}
+						} else {
+							if (temp_room.temp < set_temp) {
+								rele_on;
+							} else {
+								set_delta = true;
+								rele_off;
+							}
+						}
+					} else {
+						set_delta = false;
+						rele_off;
+					}
+				}
+        	}
         }
     }
 }
@@ -362,5 +497,5 @@ void user_init(void)
 	//Create a queue to store events on netconns
 	xQueue_events = xQueueCreate(EVENTS_QUEUE_SIZE, sizeof(netconn_events));
     xTaskCreate(socketsTask, "socketsTask", 512, NULL, 2, NULL);
-    xTaskCreate(temp, "temp", 256, NULL, 2, NULL);
+    xTaskCreate(sensor, "sensor", 512, NULL, 2, NULL);
 }
