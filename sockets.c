@@ -69,7 +69,7 @@ sensor_t temp_room = { false, 0 };
 sensor_t temp_water = { false, 0 };
 
 bool set_delta = false;
-float set_temp = 30.5, set_temp_delta = 2;
+float set_temp = 21, set_temp_delta = 1;
 bool mode = false; // false = auto, true = remote
 
 #define ADDR_DEVICE 0x300000027d06ba28
@@ -95,7 +95,10 @@ static const char * const auth_modes [] = {
 const char str_help[] = {
 		"releon/releoff\n"
 		"modeauto/moderemote\n"
-		"status\n=>"
+		"status\n"
+		"settemp=xx.x\n"
+		"setdelta=xx.x\n"
+		"=>"
 };
 
 /*
@@ -321,19 +324,35 @@ static void socketsTask(void *pvParameters)
 						} else if (strstr(buffer, "help") != 0) {
 							netconn_write(events.nc, str_help, strlen(str_help), NETCONN_COPY);
 							debug("Help");
+						} else if (strstr(buffer, "settemp=") != 0) {
+							char str[50] = "";
+							set_temp = atof(&buffer[8]);
+							sprintf(str, "Set room temp: %.01f\n=>", set_temp);
+							netconn_write(events.nc, str, strlen(str), NETCONN_COPY);
+							debug("%s", str);
+						} else if (strstr(buffer, "setdelta=") != 0) {
+							char str[50] = "";
+							set_temp_delta = atof(&buffer[9]);
+							sprintf(str, "Set temp delta: %.01f\n=>", set_temp_delta);
+							netconn_write(events.nc, str, strlen(str), NETCONN_COPY);
+							debug("%s", str);
 						} else if (strstr(buffer, "status") != 0) {
-							char str[500];
+							char str[500] = "";
 							sprintf(str, "Mode: %s\nRele: %s\n"
 										"Temp out: %.01f (%s)\n"
 										"Temp room: %.01f (%s)\n"
 										"Temp device: %.01f (%s)\n"
-										"Temp water: %.01f (%s)\n=>",
+										"Temp water: %.01f (%s)\n"
+										"Set temp: %.01f\n"
+										"Set temp delta: %.01f\n"
+										"=>",
 										mode ? "Remote" : "Auto",
 										gpio_read(rele) ? "on" : "off",
 										temp_out.temp, temp_out.state ? "work" : "error",
 										temp_room.temp, temp_room.state ? "work" : "error",
 										temp_device.temp, temp_device.state ? "work" : "error",
-										temp_water.temp, temp_water.state ? "work" : "error"
+										temp_water.temp, temp_water.state ? "work" : "error",
+										set_temp, set_temp_delta
 										);
 							netconn_write(events.nc, str, strlen(str), NETCONN_COPY);
 							debug("%s", str);
