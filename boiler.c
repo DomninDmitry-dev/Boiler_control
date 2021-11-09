@@ -26,13 +26,15 @@
 #include <lwip/sys.h>
 #include <lwip/netdb.h>
 #include <lwip/dns.h>
-
 #include <ssid_config.h>
 #include "espressif/user_interface.h"
 
-//#include <TI_aes.h>
+#include "ota-tftp.h"
+#include "rboot-api.h"
 
-#include "ds18b20/ds18b20.h"
+#include "inc/ds18b20.h"
+
+#define APP_VER	2
 
 #define CALLBACK_DEBUG
 
@@ -73,7 +75,6 @@ float set_temp = 21, set_temp_delta = 1;
 bool mode = false; // false = auto, true = remote
 
 #define ADDR_DEVICE 0x300000027d06ba28
-//#define ADDR_OUTSIDE 0x23000000a6389928
 #define ADDR_OUTSIDE 0x86000000a642d928
 #define ADDR_ROOM 0x3700000263eb4828
 #define ADDR_WATER 0x0d000000a678df28
@@ -226,9 +227,11 @@ static void socketsTask(void *pvParameters)
 	vTaskDelay(500);
 	sdk_wifi_station_dhcpc_stop();
 	debug("dhcp status : %d", sdk_wifi_station_dhcpc_status());
-	IP4_ADDR(&static_ip_info.ip, 192, 168, 0 ,200);
-	IP4_ADDR(&static_ip_info.gw, 192, 168, 0, 1);
-	IP4_ADDR(&static_ip_info.netmask, 255, 255, 255, 0);
+	//IP4_ADDR(&static_ip_info.ip, 10,42,0,200);
+	//IP4_ADDR(&static_ip_info.gw, 10,42,0,1);
+	IP4_ADDR(&static_ip_info.ip, 192,168,0,200);
+	IP4_ADDR(&static_ip_info.gw, 192,168,0,1);
+	IP4_ADDR(&static_ip_info.netmask, 255,255,255,0);
 	debug("static ip set status : %d", sdk_wifi_set_ip_info(STATION_IF, &static_ip_info));
 	vTaskDelay(500);
 	sdk_wifi_set_opmode(STATION_MODE);
@@ -511,7 +514,20 @@ void user_init(void)
 {
     gpio_set_iomux_function(2, IOMUX_GPIO2_FUNC_UART1_TXD);
     uart_set_baud(0, 115200);
-	debug("SDK version:%s\n", sdk_system_get_sdk_version());
+    printf("============================ Start ==================================\n");
+	debug("SDK version:%s, App version %d\n", sdk_system_get_sdk_version(), APP_VER);
+
+	rboot_config conf = rboot_get_config();
+	printf("OTA Boiler.\r\nCurrently running on flash slot %d / %d.\r\n",
+		   conf.current_rom, conf.count);
+
+	printf("Image addresses in flash:\r\n");
+	for(int i = 0; i <conf.count; i++) {
+		printf("%c%d: offset 0x%08x\r\n", i == conf.current_rom ? '*':' ', i, conf.roms[i]);
+	}
+
+	printf("Starting TFTP server...\n");
+	ota_tftp_init_server(TFTP_PORT);
 
 	//Create a queue to store events on netconns
 	xQueue_events = xQueueCreate(EVENTS_QUEUE_SIZE, sizeof(netconn_events));
