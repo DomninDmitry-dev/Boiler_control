@@ -34,7 +34,7 @@
 
 #include "inc/ds18b20.h"
 
-#define APP_VER	2
+#define APP_VER	3
 
 #define CALLBACK_DEBUG
 
@@ -56,15 +56,14 @@
 #define LOOP_DELAY_MS 250
 #define SENSOR_GPIO 5
 
-#define rele_on gpio_write(4, 1)
-#define rele_off gpio_write(4, 0)
-
 typedef struct {
 	bool state;
 	float temp;
 } sensor_t;
 
-const int rele = 4;
+const int boiler = 4;
+const int light1 = 14;
+const int light2 = 16;
 sensor_t temp_device = { false, 0 };
 sensor_t temp_out = { false, 0 };
 sensor_t temp_room = { false, 0 };
@@ -94,11 +93,13 @@ static const char * const auth_modes [] = {
 };
 
 const char str_help[] = {
-		"releon/releoff\n"
+		"boileron/boileroff\n"
 		"modeauto/moderemote\n"
 		"status\n"
 		"settemp=xx.x\n"
 		"setdelta=xx.x\n"
+		"lingt1on/light1off\n"
+		"lingt2on/light2off\n"
 		"=>"
 };
 
@@ -212,7 +213,11 @@ static void socketsTask(void *pvParameters)
 		.bssid_set = 0
 	};
 
-	gpio_enable(rele, GPIO_OUTPUT);
+	gpio_enable(boiler, GPIO_OUTPUT);
+	gpio_enable(light1, GPIO_OUTPUT);
+	gpio_enable(light2, GPIO_OUTPUT);
+	gpio_write(light1, 0);
+	gpio_write(light2, 0);
 
 	set_tcp_server_netconn(&nc, ECHO_PORT_1, netCallback);
 	debug("Server netconn %u ready on port %u.\n",(uint32_t)nc, ECHO_PORT_1);
@@ -296,25 +301,25 @@ static void socketsTask(void *pvParameters)
 						netbuf_data(netbuf, (void*)&buffer, &len_buf);
 						//netconn_write(events.nc, buffer, strlen(buffer), NETCONN_COPY);
 						debug("Client %u send: %s\n",(uint32_t)events.nc, buffer);
-						if (strstr(buffer, "releon") != 0) {
+						if (strstr(buffer, "boileron") != 0) {
 							if (mode) {
-								gpio_write(rele, 1);
-								netconn_write(events.nc, "Rele on\n=>", strlen("Rele on\n=>"), NETCONN_COPY);
-								debug("Rele on\n");
+								gpio_write(boiler, 1);
+								netconn_write(events.nc, "Boiler on\n=>", strlen("Boiler on\n=>"), NETCONN_COPY);
+								debug("Boiler on\n");
 							} else {
-								netconn_write(events.nc, "Rele don't on, because mode auto\n=>",
-										strlen("Rele don't on, because mode auto\n=>"), NETCONN_COPY);
-								debug("Rele don't on, because mode auto\n");
+								netconn_write(events.nc, "Boiler don't on, because mode auto\n=>",
+										strlen("Boiler don't on, because mode auto\n=>"), NETCONN_COPY);
+								debug("Boiler don't on, because mode auto\n");
 							}
-						} else if (strstr(buffer, "releoff") != 0) {
+						} else if (strstr(buffer, "boileroff") != 0) {
 							if (mode) {
-								gpio_write(rele, 0);
-								netconn_write(events.nc, "Rele off\n=>", strlen("Rele off\n=>"), NETCONN_COPY);
-								debug("Rele off");
+								gpio_write(boiler, 0);
+								netconn_write(events.nc, "Boiler off\n=>", strlen("Boiler off\n=>"), NETCONN_COPY);
+								debug("Boiler off\n");
 							} else {
-								netconn_write(events.nc, "Rele don't off, because mode auto\n=>",
-										strlen("Rele don't off, because mode auto\n=>"), NETCONN_COPY);
-								debug("Rele don't off, because mode auto\n");
+								netconn_write(events.nc, "Boiler don't off, because mode auto\n=>",
+										strlen("Boiler don't off, because mode auto\n=>"), NETCONN_COPY);
+								debug("Boiler don't off, because mode auto\n");
 							}
 						} else if (strstr(buffer, "modeauto") != 0) {
 							mode = false;
@@ -326,7 +331,7 @@ static void socketsTask(void *pvParameters)
 							debug("Mode remote\n");
 						} else if (strstr(buffer, "help") != 0) {
 							netconn_write(events.nc, str_help, strlen(str_help), NETCONN_COPY);
-							debug("Help");
+							debug("Help\n");
 						} else if (strstr(buffer, "settemp=") != 0) {
 							char str[50] = "";
 							set_temp = atof(&buffer[8]);
@@ -339,23 +344,45 @@ static void socketsTask(void *pvParameters)
 							sprintf(str, "Set temp delta: %.01f\n=>", set_temp_delta);
 							netconn_write(events.nc, str, strlen(str), NETCONN_COPY);
 							debug("%s", str);
+						} else if (strstr(buffer, "light1on") != 0) {
+							gpio_write(light1, 1);
+							netconn_write(events.nc, "Light 1 on\n=>", strlen("Light 1 on\n=>"), NETCONN_COPY);
+							debug("Light 1 on\n");
+						} else if (strstr(buffer, "light1off") != 0) {
+							gpio_write(light1, 0);
+							netconn_write(events.nc, "Light 1 off\n=>", strlen("Light 1 off\n=>"), NETCONN_COPY);
+							debug("Light 1 off\n");
+						} else if (strstr(buffer, "light2on") != 0) {
+							gpio_write(light2, 1);
+							netconn_write(events.nc, "Light 2 on\n=>", strlen("Light 2 on\n=>"), NETCONN_COPY);
+							debug("Light 2 on\n");
+						} else if (strstr(buffer, "light2off") != 0) {
+							gpio_write(light2, 0);
+							netconn_write(events.nc, "Light 2 off\n=>", strlen("Light 2 off\n=>"), NETCONN_COPY);
+							debug("Light 2 off\n");
 						} else if (strstr(buffer, "status") != 0) {
 							char str[500] = "";
-							sprintf(str, "Mode: %s\nRele: %s\n"
+							sprintf(str, "Ver: %d\n"
+										"Mode: %s\n"
+										"Boiler: %s\n"
 										"Temp out: %.01f (%s)\n"
 										"Temp room: %.01f (%s)\n"
 										"Temp device: %.01f (%s)\n"
 										"Temp water: %.01f (%s)\n"
 										"Set temp: %.01f\n"
 										"Set temp delta: %.01f\n"
-										"=>",
+										"Light 1: %s\n"
+										"Light 2: %s\n"
+										"=>", APP_VER,
 										mode ? "Remote" : "Auto",
-										gpio_read(rele) ? "on" : "off",
+										gpio_read(boiler) ? "on" : "off",
 										temp_out.temp, temp_out.state ? "work" : "error",
 										temp_room.temp, temp_room.state ? "work" : "error",
 										temp_device.temp, temp_device.state ? "work" : "error",
 										temp_water.temp, temp_water.state ? "work" : "error",
-										set_temp, set_temp_delta
+										set_temp, set_temp_delta,
+										gpio_read(light1) ? "on" : "off",
+										gpio_read(light2) ? "on" : "off"
 										);
 							netconn_write(events.nc, str, strlen(str), NETCONN_COPY);
 							debug("%s", str);
@@ -484,25 +511,25 @@ void sensor(void *pvParameters)
             if (mode == false) {
 				if (temp_out.state == false && temp_room.state == false) {
 					mode = true;
-					rele_on;
+					gpio_write(boiler, 1);
 				} else {
 					if (temp_out.temp < 10) {
 						if (set_delta) {
 							if (temp_room.temp < (set_temp - set_temp_delta)) {
 								set_delta = false;
-								rele_on;
+								gpio_write(boiler, 1);
 							}
 						} else {
 							if (temp_room.temp < set_temp) {
-								rele_on;
+								gpio_write(boiler, 1);
 							} else {
 								set_delta = true;
-								rele_off;
+								gpio_write(boiler, 0);
 							}
 						}
 					} else {
 						set_delta = false;
-						rele_off;
+						gpio_write(boiler, 0);
 					}
 				}
         	}
@@ -514,6 +541,7 @@ void user_init(void)
 {
     gpio_set_iomux_function(2, IOMUX_GPIO2_FUNC_UART1_TXD);
     uart_set_baud(0, 115200);
+
     printf("============================ Start ==================================\n");
 	debug("SDK version:%s, App version %d\n", sdk_system_get_sdk_version(), APP_VER);
 
