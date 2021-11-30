@@ -34,7 +34,7 @@
 
 #include "inc/ds18b20.h"
 
-#define APP_VER	3
+#define APP_VER	4
 
 #define CALLBACK_DEBUG
 
@@ -69,9 +69,11 @@ sensor_t temp_out = { false, 0 };
 sensor_t temp_room = { false, 0 };
 sensor_t temp_water = { false, 0 };
 
-bool set_delta = false;
-float set_temp = 21, set_temp_delta = 1;
-bool mode = false; // false = auto, true = remote
+bool in_delta = false;
+bool out_delta = false;
+float set_room_temp = 22, set_room_temp_delta = 1;
+float set_out_temp = 10, set_out_temp_delta = 2;
+bool modework = false; // false = auto, true = remote
 
 #define ADDR_DEVICE 0x300000027d06ba28
 #define ADDR_OUTSIDE 0x86000000a642d928
@@ -93,13 +95,15 @@ static const char * const auth_modes [] = {
 };
 
 const char str_help[] = {
-		"boileron/boileroff\n"
-		"modeauto/moderemote\n"
 		"status\n"
-		"settemp=xx.x\n"
-		"setdelta=xx.x\n"
-		"lingt1on/light1off\n"
-		"lingt2on/light2off\n"
+		"boileron/boileroff\n"
+		"auto/remote\n"
+		"setroomtemp=xx.x\n"
+		"setroomdelta=xx.x\n"
+		"setouttemp=xx.x\n"
+		"setoutdelta=xx.x\n"
+		"light1on/light1off\n"
+		"light2on/light2off\n"
 		"=>"
 };
 
@@ -302,46 +306,58 @@ static void socketsTask(void *pvParameters)
 						//netconn_write(events.nc, buffer, strlen(buffer), NETCONN_COPY);
 						debug("Client %u send: %s\n",(uint32_t)events.nc, buffer);
 						if (strstr(buffer, "boileron") != 0) {
-							if (mode) {
+							if (modework) {
 								gpio_write(boiler, 1);
 								netconn_write(events.nc, "Boiler on\n=>", strlen("Boiler on\n=>"), NETCONN_COPY);
 								debug("Boiler on\n");
 							} else {
-								netconn_write(events.nc, "Boiler don't on, because mode auto\n=>",
-										strlen("Boiler don't on, because mode auto\n=>"), NETCONN_COPY);
-								debug("Boiler don't on, because mode auto\n");
+								netconn_write(events.nc, "Boiler don't on, because modework auto\n=>",
+										strlen("Boiler don't on, because modework auto\n=>"), NETCONN_COPY);
+								debug("Boiler don't on, because modework auto\n");
 							}
 						} else if (strstr(buffer, "boileroff") != 0) {
-							if (mode) {
+							if (modework) {
 								gpio_write(boiler, 0);
 								netconn_write(events.nc, "Boiler off\n=>", strlen("Boiler off\n=>"), NETCONN_COPY);
 								debug("Boiler off\n");
 							} else {
-								netconn_write(events.nc, "Boiler don't off, because mode auto\n=>",
-										strlen("Boiler don't off, because mode auto\n=>"), NETCONN_COPY);
-								debug("Boiler don't off, because mode auto\n");
+								netconn_write(events.nc, "Boiler don't off, because mode work auto\n=>",
+										strlen("Boiler don't off, because mode work auto\n=>"), NETCONN_COPY);
+								debug("Boiler don't off, because mode work auto\n");
 							}
-						} else if (strstr(buffer, "modeauto") != 0) {
-							mode = false;
-							netconn_write(events.nc, "Mode auto\n=>", strlen("Mode auto\n=>"), NETCONN_COPY);
-							debug("Mode auto\n");
-						} else if (strstr(buffer, "moderemote") != 0) {
-							mode = true;
-							netconn_write(events.nc, "Mode remote\n=>", strlen("Mode remote\n=>"), NETCONN_COPY);
-							debug("Mode remote\n");
+						} else if (strstr(buffer, "auto") != 0) {
+							modework = false;
+							netconn_write(events.nc, "Mode work auto\n=>", strlen("Mode work auto\n=>"), NETCONN_COPY);
+							debug("Mode work auto\n");
+						} else if (strstr(buffer, "remote") != 0) {
+							modework = true;
+							netconn_write(events.nc, "Mode work remote\n=>", strlen("Mode work remote\n=>"), NETCONN_COPY);
+							debug("Mode work remote\n");
 						} else if (strstr(buffer, "help") != 0) {
 							netconn_write(events.nc, str_help, strlen(str_help), NETCONN_COPY);
 							debug("Help\n");
-						} else if (strstr(buffer, "settemp=") != 0) {
+						} else if (strstr(buffer, "setroomtemp=") != 0) {
 							char str[50] = "";
-							set_temp = atof(&buffer[8]);
-							sprintf(str, "Set room temp: %.01f\n=>", set_temp);
+							set_room_temp = atof(&buffer[12]);
+							sprintf(str, "Set room temp: %.01f\n=>", set_room_temp);
 							netconn_write(events.nc, str, strlen(str), NETCONN_COPY);
 							debug("%s", str);
-						} else if (strstr(buffer, "setdelta=") != 0) {
+						} else if (strstr(buffer, "setroomdelta=") != 0) {
 							char str[50] = "";
-							set_temp_delta = atof(&buffer[9]);
-							sprintf(str, "Set temp delta: %.01f\n=>", set_temp_delta);
+							set_room_temp_delta = atof(&buffer[13]);
+							sprintf(str, "Set room temp delta: %.01f\n=>", set_room_temp_delta);
+							netconn_write(events.nc, str, strlen(str), NETCONN_COPY);
+							debug("%s", str);
+						} else if (strstr(buffer, "setouttemp=") != 0) {
+							char str[50] = "";
+							set_out_temp = atof(&buffer[11]);
+							sprintf(str, "Set out temp: %.01f\n=>", set_out_temp);
+							netconn_write(events.nc, str, strlen(str), NETCONN_COPY);
+							debug("%s", str);
+						} else if (strstr(buffer, "setoutdelta=") != 0) {
+							char str[50] = "";
+							set_out_temp_delta = atof(&buffer[12]);
+							sprintf(str, "Set out temp delta: %.01f\n=>", set_out_temp_delta);
 							netconn_write(events.nc, str, strlen(str), NETCONN_COPY);
 							debug("%s", str);
 						} else if (strstr(buffer, "light1on") != 0) {
@@ -363,24 +379,29 @@ static void socketsTask(void *pvParameters)
 						} else if (strstr(buffer, "status") != 0) {
 							char str[500] = "";
 							sprintf(str, "Ver: %d\n"
-										"Mode: %s\n"
+										"Operating mode: %s\n"
 										"Boiler: %s\n"
-										"Temp out: %.01f (%s)\n"
-										"Temp room: %.01f (%s)\n"
-										"Temp device: %.01f (%s)\n"
-										"Temp water: %.01f (%s)\n"
-										"Set temp: %.01f\n"
-										"Set temp delta: %.01f\n"
+										"Outside temperature: %.01f (%s)\n"
+										"Room temperature: %.01f (%s)\n"
+										"Device temperature: %.01f (%s)\n"
+										"Water temperature: %.01f (%s)\n"
+										"Set room temperature (up): %.01f\n"
+										"Set room temperature (down): %.01f\n"
+										"Set room temperature delta: %.01f\n"
+										"Set outside temperature (up): %.01f\n"
+										"Set outside temperature (down): %.01f\n"
+										"Set outside temperature delta: %.01f\n"
 										"Light 1: %s\n"
 										"Light 2: %s\n"
 										"=>", APP_VER,
-										mode ? "Remote" : "Auto",
+										modework ? "Remote" : "Auto",
 										gpio_read(boiler) ? "on" : "off",
 										temp_out.temp, temp_out.state ? "work" : "error",
 										temp_room.temp, temp_room.state ? "work" : "error",
 										temp_device.temp, temp_device.state ? "work" : "error",
 										temp_water.temp, temp_water.state ? "work" : "error",
-										set_temp, set_temp_delta,
+										set_room_temp, set_room_temp-set_room_temp_delta, set_room_temp_delta,
+										set_out_temp, set_out_temp-set_out_temp_delta, set_out_temp_delta,
 										gpio_read(light1) ? "on" : "off",
 										gpio_read(light2) ? "on" : "off"
 										);
@@ -431,7 +452,7 @@ void sensor(void *pvParameters)
         if (sensor_count < 1) {
         	printf("\nNo sensors detected!\n");
           vTaskDelay(LOOP_DELAY_MS * 10 / portTICK_PERIOD_MS);
-          mode = true;
+          modework = true;
         } else {
         	printf("\n%d sensors detected:\n", sensor_count);
             // If there were more sensors found than we have space to handle,
@@ -508,27 +529,30 @@ void sensor(void *pvParameters)
                 // least 750ms to run, so this is on top of that delay).
                 vTaskDelay(LOOP_DELAY_MS / portTICK_PERIOD_MS);
             }
-            if (mode == false) {
+            if (modework == false) {
 				if (temp_out.state == false && temp_room.state == false) {
-					mode = true;
+					modework = true;
 					gpio_write(boiler, 1);
 				} else {
-					if (temp_out.temp < 10) {
-						if (set_delta) {
-							if (temp_room.temp < (set_temp - set_temp_delta)) {
-								set_delta = false;
+					if ((temp_out.temp < set_out_temp && out_delta == false) ||
+						(temp_out.temp < set_out_temp - set_out_temp_delta && out_delta == true) ) {
+						out_delta = false;
+						if (in_delta) {
+							if (temp_room.temp < (set_room_temp - set_room_temp_delta)) {
+								in_delta = false;
 								gpio_write(boiler, 1);
 							}
 						} else {
-							if (temp_room.temp < set_temp) {
+							if (temp_room.temp < set_room_temp) {
 								gpio_write(boiler, 1);
 							} else {
-								set_delta = true;
+								in_delta = true;
 								gpio_write(boiler, 0);
 							}
 						}
 					} else {
-						set_delta = false;
+						out_delta = true;
+						in_delta = false;
 						gpio_write(boiler, 0);
 					}
 				}
