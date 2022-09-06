@@ -34,7 +34,7 @@
 
 #include "inc/ds18b20.h"
 
-#define APP_VER	4
+#define APP_VER	6
 
 #define CALLBACK_DEBUG
 
@@ -69,11 +69,13 @@ sensor_t temp_out = { false, 0 };
 sensor_t temp_room = { false, 0 };
 sensor_t temp_water = { false, 0 };
 
+typedef enum { m_auto = 0, m_remote } modework_t;
+
 bool in_delta = false;
 bool out_delta = false;
-float set_room_temp = 22, set_room_temp_delta = 1;
+float set_room_temp = 17, set_room_temp_delta = 2;
 float set_out_temp = 10, set_out_temp_delta = 2;
-bool modework = false; // false = auto, true = remote
+modework_t modework = m_auto; // false = auto, true = remote
 
 #define ADDR_DEVICE 0x300000027d06ba28
 #define ADDR_OUTSIDE 0x86000000a642d928
@@ -104,6 +106,7 @@ const char str_help[] = {
 		"setoutdelta=xx.x\n"
 		"light1on/light1off\n"
 		"light2on/light2off\n"
+		"reboot\n"
 		"=>"
 };
 
@@ -238,8 +241,8 @@ static void socketsTask(void *pvParameters)
 	debug("dhcp status : %d", sdk_wifi_station_dhcpc_status());
 	//IP4_ADDR(&static_ip_info.ip, 10,42,0,200);
 	//IP4_ADDR(&static_ip_info.gw, 10,42,0,1);
-	IP4_ADDR(&static_ip_info.ip, 192,168,0,200);
-	IP4_ADDR(&static_ip_info.gw, 192,168,0,1);
+	IP4_ADDR(&static_ip_info.ip, 192,168,1,200);
+	IP4_ADDR(&static_ip_info.gw, 192,168,1,1);
 	IP4_ADDR(&static_ip_info.netmask, 255,255,255,0);
 	debug("static ip set status : %d", sdk_wifi_set_ip_info(STATION_IF, &static_ip_info));
 	vTaskDelay(500);
@@ -306,7 +309,7 @@ static void socketsTask(void *pvParameters)
 						//netconn_write(events.nc, buffer, strlen(buffer), NETCONN_COPY);
 						debug("Client %u send: %s\n",(uint32_t)events.nc, buffer);
 						if (strstr(buffer, "boileron") != 0) {
-							if (modework) {
+							if (modework == m_remote) {
 								gpio_write(boiler, 1);
 								netconn_write(events.nc, "Boiler on\n=>", strlen("Boiler on\n=>"), NETCONN_COPY);
 								debug("Boiler on\n");
@@ -316,7 +319,7 @@ static void socketsTask(void *pvParameters)
 								debug("Boiler don't on, because modework auto\n");
 							}
 						} else if (strstr(buffer, "boileroff") != 0) {
-							if (modework) {
+							if (modework == m_remote) {
 								gpio_write(boiler, 0);
 								netconn_write(events.nc, "Boiler off\n=>", strlen("Boiler off\n=>"), NETCONN_COPY);
 								debug("Boiler off\n");
@@ -326,11 +329,11 @@ static void socketsTask(void *pvParameters)
 								debug("Boiler don't off, because mode work auto\n");
 							}
 						} else if (strstr(buffer, "auto") != 0) {
-							modework = false;
+							modework = m_auto;
 							netconn_write(events.nc, "Mode work auto\n=>", strlen("Mode work auto\n=>"), NETCONN_COPY);
 							debug("Mode work auto\n");
 						} else if (strstr(buffer, "remote") != 0) {
-							modework = true;
+							modework = m_remote;
 							netconn_write(events.nc, "Mode work remote\n=>", strlen("Mode work remote\n=>"), NETCONN_COPY);
 							debug("Mode work remote\n");
 						} else if (strstr(buffer, "help") != 0) {
@@ -376,6 +379,11 @@ static void socketsTask(void *pvParameters)
 							gpio_write(light2, 0);
 							netconn_write(events.nc, "Light 2 off\n=>", strlen("Light 2 off\n=>"), NETCONN_COPY);
 							debug("Light 2 off\n");
+						} else if (strstr(buffer, "reboot") != 0) {
+							gpio_write(light2, 0);
+							netconn_write(events.nc, "Rebooting system...\n", strlen("Rebooting system...\n"), NETCONN_COPY);
+							debug("Rebooting system...\n");
+							sdk_system_restart();
 						} else if (strstr(buffer, "status") != 0) {
 							char str[500] = "";
 							sprintf(str, "Ver: %d\n"
@@ -394,7 +402,7 @@ static void socketsTask(void *pvParameters)
 										"Light 1: %s\n"
 										"Light 2: %s\n"
 										"=>", APP_VER,
-										modework ? "Remote" : "Auto",
+										(modework == m_remote) ? "Remote" : "Auto",
 										gpio_read(boiler) ? "on" : "off",
 										temp_out.temp, temp_out.state ? "work" : "error",
 										temp_room.temp, temp_room.state ? "work" : "error",
@@ -452,7 +460,7 @@ void sensor(void *pvParameters)
         if (sensor_count < 1) {
         	printf("\nNo sensors detected!\n");
           vTaskDelay(LOOP_DELAY_MS * 10 / portTICK_PERIOD_MS);
-          modework = true;
+          modework = m_remote;
         } else {
         	printf("\n%d sensors detected:\n", sensor_count);
             // If there were more sensors found than we have space to handle,
@@ -529,10 +537,9 @@ void sensor(void *pvParameters)
                 // least 750ms to run, so this is on top of that delay).
                 vTaskDelay(LOOP_DELAY_MS / portTICK_PERIOD_MS);
             }
-            if (modework == false) {
-				if (temp_out.state == false && temp_room.state == false) {
-					modework = true;
-					gpio_write(boiler, 1);
+            if (modework == m_auto) {
+				if (temp_out.state == false || temp_room.state == false) {
+					gpio_write(boiler, 0);
 				} else {
 					if ((temp_out.temp < set_out_temp && out_delta == false) ||
 						(temp_out.temp < set_out_temp - set_out_temp_delta && out_delta == true) ) {
