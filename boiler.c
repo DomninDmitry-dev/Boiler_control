@@ -34,7 +34,7 @@
 
 #include "inc/ds18b20.h"
 
-#define APP_VER	6
+#define APP_VER	7
 
 #define CALLBACK_DEBUG
 
@@ -62,8 +62,9 @@ typedef struct {
 } sensor_t;
 
 const int boiler = 4;
-const int light1 = 14;
-const int light2 = 16;
+const int light1 = 16;
+const int light2 = 14;
+const int boiler_power = 12;
 sensor_t temp_device = { false, 0 };
 sensor_t temp_out = { false, 0 };
 sensor_t temp_room = { false, 0 };
@@ -106,6 +107,7 @@ const char str_help[] = {
 		"setoutdelta=xx.x\n"
 		"light1on/light1off\n"
 		"light2on/light2off\n"
+		"boilerpwron/boilerpwroff\n"
 		"reboot\n"
 		"=>"
 };
@@ -223,8 +225,10 @@ static void socketsTask(void *pvParameters)
 	gpio_enable(boiler, GPIO_OUTPUT);
 	gpio_enable(light1, GPIO_OUTPUT);
 	gpio_enable(light2, GPIO_OUTPUT);
+	gpio_enable(boiler_power, GPIO_OUTPUT);
 	gpio_write(light1, 0);
 	gpio_write(light2, 0);
+	gpio_write(boiler_power, 0);
 
 	set_tcp_server_netconn(&nc, ECHO_PORT_1, netCallback);
 	debug("Server netconn %u ready on port %u.\n",(uint32_t)nc, ECHO_PORT_1);
@@ -379,8 +383,15 @@ static void socketsTask(void *pvParameters)
 							gpio_write(light2, 0);
 							netconn_write(events.nc, "Light 2 off\n=>", strlen("Light 2 off\n=>"), NETCONN_COPY);
 							debug("Light 2 off\n");
+						} else if (strstr(buffer, "boilerpwron") != 0) {
+							gpio_write(boiler_power, 0);
+							netconn_write(events.nc, "Boiler power on\n=>", strlen("Boiler power on\n=>"), NETCONN_COPY);
+							debug("Boiler power on\n");
+						} else if (strstr(buffer, "boilerpwroff") != 0) {
+							gpio_write(boiler_power, 1);
+							netconn_write(events.nc, "Boiler power off\n=>", strlen("Boiler power off\n=>"), NETCONN_COPY);
+							debug("Boiler power off\n");
 						} else if (strstr(buffer, "reboot") != 0) {
-							gpio_write(light2, 0);
 							netconn_write(events.nc, "Rebooting system...\n", strlen("Rebooting system...\n"), NETCONN_COPY);
 							debug("Rebooting system...\n");
 							sdk_system_restart();
@@ -401,6 +412,7 @@ static void socketsTask(void *pvParameters)
 										"Set outside temperature delta: %.01f\n"
 										"Light 1: %s\n"
 										"Light 2: %s\n"
+										"Boiler power: %s\n"
 										"=>", APP_VER,
 										(modework == m_remote) ? "Remote" : "Auto",
 										gpio_read(boiler) ? "on" : "off",
@@ -411,7 +423,8 @@ static void socketsTask(void *pvParameters)
 										set_room_temp, set_room_temp-set_room_temp_delta, set_room_temp_delta,
 										set_out_temp, set_out_temp-set_out_temp_delta, set_out_temp_delta,
 										gpio_read(light1) ? "on" : "off",
-										gpio_read(light2) ? "on" : "off"
+										gpio_read(light2) ? "on" : "off",
+										gpio_read(boiler_power) ? "off" : "on"
 										);
 							netconn_write(events.nc, str, strlen(str), NETCONN_COPY);
 							debug("%s", str);
