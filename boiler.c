@@ -34,7 +34,7 @@
 
 #include "inc/ds18b20.h"
 
-#define APP_VER	8
+#define APP_VER	11
 
 #define CALLBACK_DEBUG
 
@@ -62,9 +62,9 @@ typedef struct {
 } sensor_t;
 
 const int boiler = 4;
-const int light1 = 16;
-const int light2 = 14;
-const int boiler_power = 12;
+const int camera = 16;
+const int light = 14;
+const int aquarium_light = 12;
 sensor_t temp_device = { false, 0 };
 sensor_t temp_out = { false, 0 };
 sensor_t temp_room = { false, 0 };
@@ -105,8 +105,9 @@ const char str_help[] = {
 		"setroomdelta=xx.x\n"
 		"setouttemp=xx.x\n"
 		"setoutdelta=xx.x\n"
-		"light1on/light1off\n"
-		"light2on/light2off\n"
+		"Cameraon/cameraoff\n"
+		"lighton/lightoff\n"
+		"aqualighton/aqualightoff\n"
 		"reboot\n"
 		"=>"
 };
@@ -210,7 +211,7 @@ static void socketsTask(void *pvParameters)
 	struct netconn *nc = NULL; // To create servers
 	struct netbuf *netbuf = NULL; // To store incoming Data
 	struct netconn *nc_in = NULL; // To accept incoming netconn
-	char buf[50];
+	char buf[200];
 	char* buffer;
 	uint16_t len_buf;
 	netconn_events events;
@@ -222,12 +223,12 @@ static void socketsTask(void *pvParameters)
 	};
 
 	gpio_enable(boiler, GPIO_OUTPUT);
-	gpio_enable(light1, GPIO_OUTPUT);
-	gpio_enable(light2, GPIO_OUTPUT);
-	gpio_enable(boiler_power, GPIO_OUTPUT);
-	gpio_write(light1, 0);
-	gpio_write(light2, 0);
-	gpio_write(boiler_power, 0);
+	gpio_enable(camera, GPIO_OUTPUT);
+	gpio_enable(light, GPIO_OUTPUT);
+	gpio_enable(aquarium_light, GPIO_OUTPUT);
+	gpio_write(camera, 0);
+	gpio_write(light, 0);
+	gpio_write(aquarium_light, 1); // default disabled
 
 	set_tcp_server_netconn(&nc, ECHO_PORT_1, netCallback);
 	debug("Server netconn %u ready on port %u.\n",(uint32_t)nc, ECHO_PORT_1);
@@ -295,7 +296,9 @@ static void socketsTask(void *pvParameters)
 			ip_addr_t client_addr; //Address port
 			uint16_t client_port; //Client port
 			netconn_peer(nc_in, &client_addr, &client_port);
-			snprintf(buf, sizeof(buf), "Your address is %d.%d.%d.%d:%u.\r\n=>",
+			snprintf(buf, sizeof(buf),
+					"========== Boiler control ==========\n"
+					"Your address is %d.%d.%d.%d:%u.\r\n=>",
 					ip4_addr1(&client_addr), ip4_addr2(&client_addr),
 					ip4_addr3(&client_addr), ip4_addr4(&client_addr),
 					client_port);
@@ -366,22 +369,30 @@ static void socketsTask(void *pvParameters)
 							sprintf(str, "Set out temp delta: %.01f\n=>", set_out_temp_delta);
 							netconn_write(events.nc, str, strlen(str), NETCONN_COPY);
 							debug("%s", str);
-						} else if (strstr(buffer, "light1on") != 0) {
-							gpio_write(light1, 1);
-							netconn_write(events.nc, "Light 1 on\n=>", strlen("Light 1 on\n=>"), NETCONN_COPY);
-							debug("Light 1 on\n");
-						} else if (strstr(buffer, "light1off") != 0) {
-							gpio_write(light1, 0);
-							netconn_write(events.nc, "Light 1 off\n=>", strlen("Light 1 off\n=>"), NETCONN_COPY);
-							debug("Light 1 off\n");
-						} else if (strstr(buffer, "light2on") != 0) {
-							gpio_write(light2, 1);
-							netconn_write(events.nc, "Light 2 on\n=>", strlen("Light 2 on\n=>"), NETCONN_COPY);
-							debug("Light 2 on\n");
-						} else if (strstr(buffer, "light2off") != 0) {
-							gpio_write(light2, 0);
-							netconn_write(events.nc, "Light 2 off\n=>", strlen("Light 2 off\n=>"), NETCONN_COPY);
-							debug("Light 2 off\n");
+						} else if (strstr(buffer, "cameraon") != 0) {
+							gpio_write(camera, 1);
+							netconn_write(events.nc, "Camera on\n=>", strlen("Camera on\n=>"), NETCONN_COPY);
+							debug("Camera on\n");
+						} else if (strstr(buffer, "cameraoff") != 0) {
+							gpio_write(camera, 0);
+							netconn_write(events.nc, "Camera off\n=>", strlen("Camera off\n=>"), NETCONN_COPY);
+							debug("Camera off\n");
+						} else if (strstr(buffer, "lighton") != 0) {
+							gpio_write(light, 1);
+							netconn_write(events.nc, "Light on\n=>", strlen("Light on\n=>"), NETCONN_COPY);
+							debug("Light on\n");
+						} else if (strstr(buffer, "lightoff") != 0) {
+							gpio_write(light, 0);
+							netconn_write(events.nc, "Light off\n=>", strlen("Light off\n=>"), NETCONN_COPY);
+							debug("Light off\n");
+						} else if (strstr(buffer, "aqualighton") != 0) {
+							gpio_write(aquarium_light, 0);
+							netconn_write(events.nc, "Aquarium light on\n=>", strlen("Aquarium light on\n=>"), NETCONN_COPY);
+							debug("Aquarium light on\n");
+						} else if (strstr(buffer, "aqualightoff") != 0) {
+							gpio_write(aquarium_light, 1);
+							netconn_write(events.nc, "Aquarium light off\n=>", strlen("Aquarium light off\n=>"), NETCONN_COPY);
+							debug("Aquarium light off\n");
 						} else if (strstr(buffer, "reboot") != 0) {
 							netconn_write(events.nc, "Rebooting system...\n", strlen("Rebooting system...\n"), NETCONN_COPY);
 							debug("Rebooting system...\n");
@@ -403,6 +414,7 @@ static void socketsTask(void *pvParameters)
 										"Set outside temperature delta: %.01f\n"
 										"Light 1: %s\n"
 										"Light 2: %s\n"
+										"Aquarium light: %s\n"
 										"=>", APP_VER,
 										(modework == m_remote) ? "Remote" : "Auto",
 										gpio_read(boiler) ? "on" : "off",
@@ -412,8 +424,9 @@ static void socketsTask(void *pvParameters)
 										temp_water.temp, temp_water.state ? "work" : "error",
 										set_room_temp, set_room_temp-set_room_temp_delta, set_room_temp_delta,
 										set_out_temp, set_out_temp-set_out_temp_delta, set_out_temp_delta,
-										gpio_read(light1) ? "on" : "off",
-										gpio_read(light2) ? "on" : "off"
+										gpio_read(camera) ? "on" : "off",
+										gpio_read(light) ? "on" : "off",
+										gpio_read(aquarium_light) ? "off" : "on"
 										);
 							netconn_write(events.nc, str, strlen(str), NETCONN_COPY);
 							debug("%s", str);
@@ -462,7 +475,6 @@ void sensor(void *pvParameters)
         if (sensor_count < 1) {
         	printf("\nNo sensors detected!\n");
           vTaskDelay(LOOP_DELAY_MS * 10 / portTICK_PERIOD_MS);
-          modework = m_remote;
         } else {
         	printf("\n%d sensors detected:\n", sensor_count);
             // If there were more sensors found than we have space to handle,
