@@ -34,7 +34,7 @@
 
 #include "inc/ds18b20.h"
 
-#define APP_VER	11
+#define APP_VER	12
 
 #define CALLBACK_DEBUG
 
@@ -107,10 +107,13 @@ const char str_help[] = {
 		"setoutdelta=xx.x\n"
 		"Cameraon/cameraoff\n"
 		"lighton/lightoff\n"
-		"aqualighton/aqualightoff\n"
+		"aquaon/aquaoff\n"
 		"reboot\n"
 		"=>"
 };
+
+/** Semaphore to signal wifi availability */
+SemaphoreHandle_t wifi_alive;
 
 /*
  * This function will be call in Lwip in each event on netconn
@@ -204,9 +207,66 @@ static void scan_done_cb(void *arg, sdk_scan_status_t status)
     }
 }
 
+static void wifiTask(void *pvParameters) {
+	uint8_t status  = 0;
+	struct sdk_station_config config = {
+		.ssid = WIFI_SSID,
+		.password = WIFI_PASS,
+		.bssid_set = 0
+	};
+	int cntWait = 0;
+
+	xSemaphoreTake(wifi_alive, portMAX_DELAY);
+
+	sdk_wifi_set_opmode(STATION_MODE);
+	sdk_wifi_station_set_config(&config);
+	//sdk_wifi_station_connect();
+
+	while(1) {
+		while (status != STATION_GOT_IP) {
+			if (++cntWait == 3*6) {
+				debug("Rebooting system...\n");
+				sdk_system_restart();
+			}
+			sdk_wifi_station_scan(NULL, scan_done_cb);
+			vTaskDelayMs(10000); // Меньше 5 секунд нельзя, выдает ошибку подключения!!!
+			status = sdk_wifi_station_get_connect_status();
+			debug("%s: connecting (cnt wait %d), status = %d\n\r", __func__, cntWait, status );
+			switch (status) {
+				case STATION_WRONG_PASSWORD: {
+					debug("WiFi: wrong password\n\r");
+					break;
+				}
+				case STATION_NO_AP_FOUND: {
+					debug("WiFi: AP not found\n\r");
+					break;
+				}
+				case STATION_CONNECT_FAIL: {
+					debug("WiFi: connection failed\r\n");
+					break;
+				}
+				case STATION_GOT_IP: {
+					debug("WiFi: Connected\n\r");
+					xSemaphoreGive(wifi_alive);
+					taskYIELD();
+					break;
+				}
+			}
+		}
+		while ((status = sdk_wifi_station_get_connect_status()) == STATION_GOT_IP) {
+			vTaskDelayMs(1000);
+		}
+		cntWait = 0;
+		printf("WiFi: disconnected\n");
+		sdk_wifi_station_disconnect();
+		vTaskDelayMs(10000);
+		sdk_wifi_station_connect();
+		xSemaphoreTake(wifi_alive, portMAX_DELAY);
+	}
+}
+
 static void socketsTask(void *pvParameters)
 {
-	uint8_t status  = 0;
 	UNUSED_ARG(pvParameters);
 	struct netconn *nc = NULL; // To create servers
 	struct netbuf *netbuf = NULL; // To store incoming Data
@@ -215,12 +275,6 @@ static void socketsTask(void *pvParameters)
 	char* buffer;
 	uint16_t len_buf;
 	netconn_events events;
-	struct ip_info static_ip_info;
-	struct sdk_station_config config = {
-		.ssid = WIFI_SSID,
-		.password = WIFI_PASS,
-		.bssid_set = 0
-	};
 
 	gpio_enable(boiler, GPIO_OUTPUT);
 	gpio_enable(camera, GPIO_OUTPUT);
@@ -235,51 +289,9 @@ static void socketsTask(void *pvParameters)
 	set_tcp_server_netconn(&nc, ECHO_PORT_2, netCallback);
 	debug("Server netconn %u ready on port %u.\n",(uint32_t)nc, ECHO_PORT_2);
 
-	debug("ssid: %s\n", config.ssid);
-	debug("password: %s\n", config.password);
-
-	sdk_wifi_station_disconnect();
-	sdk_wifi_set_opmode(NULL_MODE);
-	vTaskDelay(500);
-	sdk_wifi_station_dhcpc_stop();
-	debug("dhcp status : %d", sdk_wifi_station_dhcpc_status());
-	//IP4_ADDR(&static_ip_info.ip, 10,42,0,200);
-	//IP4_ADDR(&static_ip_info.gw, 10,42,0,1);
-	IP4_ADDR(&static_ip_info.ip, 192,168,1,200);
-	IP4_ADDR(&static_ip_info.gw, 192,168,1,1);
-	IP4_ADDR(&static_ip_info.netmask, 255,255,255,0);
-	debug("static ip set status : %d", sdk_wifi_set_ip_info(STATION_IF, &static_ip_info));
-	vTaskDelay(500);
-	sdk_wifi_set_opmode(STATION_MODE);
-	sdk_wifi_station_set_config(&config);
-	sdk_wifi_station_connect();
-
-	while (status != STATION_GOT_IP) {
-		sdk_wifi_station_scan(NULL, scan_done_cb);
-		vTaskDelayMs(5000);
-		status = sdk_wifi_station_get_connect_status();
-		debug("%s: status = %d\n\r", __func__, status );
-		switch (status) {
-			case STATION_WRONG_PASSWORD: {
-				debug("WiFi: wrong password\n\r");
-				break;
-			}
-			case STATION_NO_AP_FOUND: {
-				debug("WiFi: AP not found\n\r");
-				break;
-			}
-			case STATION_CONNECT_FAIL: {
-				debug("WiFi: connection failed\r\n");
-				break;
-			}
-			case STATION_GOT_IP: {
-				debug("WiFi: Connected\n\r");
-				break;
-			}
-		}
-	}
-	if (status == STATION_GOT_IP)
-		while (1) {
+	while (1) {
+		xSemaphoreTake(wifi_alive, portMAX_DELAY);
+		xSemaphoreGive(wifi_alive);
 
 		xQueueReceive(xQueue_events, &events, portMAX_DELAY); // Wait here an event on netconn
 
@@ -297,7 +309,7 @@ static void socketsTask(void *pvParameters)
 			uint16_t client_port; //Client port
 			netconn_peer(nc_in, &client_addr, &client_port);
 			snprintf(buf, sizeof(buf),
-					"========== Boiler control ==========\n"
+					"* Boiler control *\n"
 					"Your address is %d.%d.%d.%d:%u.\r\n=>",
 					ip4_addr1(&client_addr), ip4_addr2(&client_addr),
 					ip4_addr3(&client_addr), ip4_addr4(&client_addr),
@@ -385,11 +397,11 @@ static void socketsTask(void *pvParameters)
 							gpio_write(light, 0);
 							netconn_write(events.nc, "Light off\n=>", strlen("Light off\n=>"), NETCONN_COPY);
 							debug("Light off\n");
-						} else if (strstr(buffer, "aqualighton") != 0) {
+						} else if (strstr(buffer, "aquaon") != 0) {
 							gpio_write(aquarium_light, 0);
 							netconn_write(events.nc, "Aquarium light on\n=>", strlen("Aquarium light on\n=>"), NETCONN_COPY);
 							debug("Aquarium light on\n");
-						} else if (strstr(buffer, "aqualightoff") != 0) {
+						} else if (strstr(buffer, "aquaoff") != 0) {
 							gpio_write(aquarium_light, 1);
 							netconn_write(events.nc, "Aquarium light off\n=>", strlen("Aquarium light off\n=>"), NETCONN_COPY);
 							debug("Aquarium light off\n");
@@ -468,6 +480,9 @@ void sensor(void *pvParameters)
     //gpio_set_pullup(SENSOR_GPIO, true, true);
 
     while(1) {
+    	xSemaphoreTake(wifi_alive, portMAX_DELAY);
+		xSemaphoreGive(wifi_alive);
+
         // Every RESCAN_INTERVAL samples, check to see if the sensors connected
         // to our bus have changed.
         sensor_count = ds18b20_scan_devices(SENSOR_GPIO, addrs, MAX_SENSORS);
@@ -600,6 +615,8 @@ void sensor(void *pvParameters)
 
 void user_init(void)
 {
+	vSemaphoreCreateBinary(wifi_alive);
+
     gpio_set_iomux_function(2, IOMUX_GPIO2_FUNC_UART1_TXD);
     uart_set_baud(0, 115200);
 
@@ -618,6 +635,8 @@ void user_init(void)
 	printf("Starting TFTP server...\n");
 	ota_tftp_init_server(TFTP_PORT);
 
+	xTaskCreate(wifiTask, "wifi", 256, NULL, 2, NULL);
+	vTaskDelayMs(250);
 	//Create a queue to store events on netconns
 	xQueue_events = xQueueCreate(EVENTS_QUEUE_SIZE, sizeof(netconn_events));
     xTaskCreate(socketsTask, "socketsTask", 512, NULL, 2, NULL);
